@@ -1,0 +1,76 @@
+version: '3.9'
+
+services:
+  # ── Local LLM via Ollama (AMD ROCm) ──────────────────────────────────────
+  ollama:
+    image: ollama/ollama:rocm
+    container_name: voxrouter-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    devices:
+      # AMD GPU passthrough (ROCm)
+      - /dev/kfd
+      - /dev/dri
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - HSA_OVERRIDE_GFX_VERSION=11.0.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Model pull on startup ─────────────────────────────────────────────────
+  ollama-init:
+    image: ollama/ollama:rocm
+    container_name: voxrouter-ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        ollama pull llama3.2:1b &&
+        ollama pull qwen2.5:3b &&
+        ollama pull phi3.5:3.8b &&
+        echo 'All models ready'
+      "
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    restart: "no"
+
+  # ── FastAPI Backend ───────────────────────────────────────────────────────
+  backend:
+    build: ./backend
+    container_name: voxrouter-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - FIREWORKS_API_KEY=${FIREWORKS_API_KEY:-demo}
+      - OLLAMA_HOST=http://ollama:11434
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── React Frontend ────────────────────────────────────────────────────────
+  frontend:
+    build: ./frontend
+    container_name: voxrouter-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
