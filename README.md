@@ -1,17 +1,19 @@
 # VoxRouter — Hybrid Token-Efficient Routing Agent
 
-> **AMD Developer Hackathon ACT II · Track 1**
-> Build an AI agent that completes tasks using the fewest tokens possible.
+> Route every AI task to the cheapest model that can handle it.  
+> Local when possible. Remote when necessary. Always efficient.
 
-![VoxRouter Dashboard](https://img.shields.io/badge/track-1%20hybrid%20routing-ED1C24?style=for-the-badge&logo=amd)
+![Dashboard](./docs/dashboard.png)
+
 ![Stack](https://img.shields.io/badge/stack-FastAPI%20%7C%20Ollama%20%7C%20Fireworks%20AI%20%7C%20React-22c55e?style=for-the-badge)
+![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)
 ![Containerized](https://img.shields.io/badge/containerized-Docker%20Compose-blue?style=for-the-badge&logo=docker)
 
 ---
 
 ## What is VoxRouter?
 
-VoxRouter is an intelligent routing agent that processes each task and decides **in real time** whether to use:
+VoxRouter is an intelligent routing middleware that processes each task and decides **in real time** whether to use:
 
 - **Local model** via Ollama (AMD ROCm) — zero API cost, sub-100ms for simple tasks
 - **Remote model** via Fireworks AI — high capability, reserved for complex tasks
@@ -129,14 +131,14 @@ curl http://localhost:8000/api/stats
 
 ---
 
-## Development (no Docker)
+## Development (without Docker)
 
 ### Backend
 
 ```bash
 cd backend
 pip install -r requirements.txt
-cp ../.env.example ../.env
+cp ../.env.example .env
 uvicorn main:app --reload --port 8000
 ```
 
@@ -151,7 +153,7 @@ npm run dev
 ### Local models (Ollama)
 
 ```bash
-# Install: https://ollama.ai
+# Install from https://ollama.ai
 ollama serve
 ollama pull llama3.2:1b
 ollama pull qwen2.5:3b
@@ -176,6 +178,7 @@ Route and execute a single task.
 ```
 
 **Response:**
+
 ```json
 {
   "task_id": "a3f8c2d1",
@@ -216,11 +219,13 @@ Server-Sent Events live feed of tasks as they complete.
 
 The efficiency score (0–100) rewards optimal routing:
 
-- ✅ +10 pts: Trivial/simple task → local model
-- ✅ +10 pts: Complex/expert task → remote model
-- ⚠️ +3 pts: Trivial task → remote model (wasted credits)
-- ⚠️ +4 pts: Complex task → local model (risky accuracy)
-- ➡️ +7 pts: Moderate task → either model
+| Decision | Points |
+|----------|--------|
+| Trivial/simple task → local | +10 |
+| Complex/expert task → remote | +10 |
+| Trivial task → remote (wasted) | +3 |
+| Complex task → local (risky) | +4 |
+| Moderate task → either | +7 |
 
 ---
 
@@ -256,19 +261,20 @@ voxrouter/
 
 ---
 
-## Built With
+## Roadmap
 
-- **FastAPI** — async Python backend
-- **Ollama** — local model runtime with AMD ROCm support
-- **Fireworks AI** — remote model API (Llama, Mixtral on AMD hardware)
-- **React + Recharts** — live dashboard
-- **Docker Compose** — single-command deployment
+- [ ] Benchmark mode — 50-task eval suite with VoxRouter Score
+- [ ] Streaming — real-time token streaming to dashboard
+- [ ] SDK — `pip install voxrouter` drop-in routing layer
+- [ ] Budget enforcement — aggressive local routing as token budget depletes
+- [ ] Multi-agent chain — break expert tasks into routed subtasks
 
 ---
 
-## AMD ACT II · Track 1 Submission
+## Built With
 
-**Team:** SHOnnay  
-**Track:** Track 1 — Hybrid Token-Efficient Routing Agent  
-**Approach:** Multi-layer complexity classifier + confidence-based escalation  
-**Judged on:** Token count and output accuracy
+- [FastAPI](https://fastapi.tiangolo.com) — async Python backend
+- [Ollama](https://ollama.ai) — local model runtime with AMD ROCm support
+- [Fireworks AI](https://fireworks.ai) — remote model API
+- [React](https://react.dev) + [Recharts](https://recharts.org) — live dashboard
+- [Docker Compose](https://docs.docker.com/compose) — single-command deployment
