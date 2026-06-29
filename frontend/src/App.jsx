@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts'
-import { submitTask, submitBatch } from './lib/api'
+import { submitTask, submitBatch, startBenchmark, fetchBenchmark, fetchBenchmarkList } from './lib/api'
 import { useStats } from './hooks/useStats'
 import './App.css'
 
@@ -100,6 +100,169 @@ function TaskRow({ task }) {
               <div className="detail-content mono">{task.escalation_reason}</div>
             </div>
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BenchmarkPanel() {
+  const [tier, setTier] = useState('all')
+  const [runId, setRunId] = useState(null)
+  const [report, setReport] = useState(null)
+  const [progress, setProgress] = useState([])
+  const [running, setRunning] = useState(false)
+  const [history, setHistory] = useState([])
+
+  useEffect(() => {
+    fetchBenchmarkList().then(d => setHistory(d.runs || [])).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (!runId) return
+    const interval = setInterval(async () => {
+      try {
+        const data = await fetchBenchmark(runId)
+        setProgress(data.progress || [])
+        if (data.status === 'complete' || data.status === 'error') {
+          setReport(data)
+          setRunning(false)
+          setHistory(prev => [{ run_id: runId, status: data.status, voxrouter_score: data.voxrouter_score, accuracy_pct: data.accuracy_pct, token_savings_pct: data.token_savings_pct, total_tasks: data.total_tasks }, ...prev])
+          clearInterval(interval)
+        }
+      } catch {}
+    }, 800)
+    return () => clearInterval(interval)
+  }, [runId])
+
+  const handleRun = async () => {
+    setRunning(true)
+    setReport(null)
+    setProgress([])
+    try {
+      const data = await startBenchmark(tier)
+      setRunId(data.run_id)
+    } catch (e) {
+      alert('Error: ' + e.message)
+      setRunning(false)
+    }
+  }
+
+  const scoreColor = (s) => s >= 80 ? 'var(--green)' : s >= 50 ? 'var(--amber)' : 'var(--amd-red)'
+  const tiers = ['all', 'trivial', 'simple', 'moderate', 'complex', 'expert']
+
+  return (
+    <div className="panel benchmark-panel">
+      <div className="benchmark-header">
+        <div>
+          <div className="chart-title">VOXROUTER BENCHMARK</div>
+          <div className="benchmark-sub">50-task eval suite · accuracy + token efficiency</div>
+        </div>
+        <div className="benchmark-controls">
+          <select className="select select-sm" value={tier} onChange={e => setTier(e.target.value)} disabled={running}>
+            {tiers.map(t => <option key={t} value={t}>{t === 'all' ? 'All 50 tasks' : `${t} (10 tasks)`}</option>)}
+          </select>
+          <button className="btn btn-primary btn-sm" onClick={handleRun} disabled={running}>
+            {running ? <span className="spinner" /> : '▶'}
+            {running ? ' Running…' : ' Run Benchmark'}
+          </button>
+        </div>
+      </div>
+
+      {/* Score display */}
+      {report && report.status === 'complete' && (
+        <div className="benchmark-score-row">
+          <div className="score-main">
+            <div className="score-label">VOXROUTER SCORE</div>
+            <div className="score-value" style={{ color: scoreColor(report.voxrouter_score) }}>
+              {report.voxrouter_score}
+            </div>
+            <div className="score-hint">out of 100</div>
+          </div>
+          <div className="score-breakdown">
+            <div className="score-item">
+              <span className="score-item-label">Accuracy</span>
+              <span className="score-item-value mono" style={{ color: scoreColor(report.accuracy_pct) }}>{report.accuracy_pct}%</span>
+            </div>
+            <div className="score-item">
+              <span className="score-item-label">Routing</span>
+              <span className="score-item-value mono" style={{ color: scoreColor(report.routing_pct) }}>{report.routing_pct}%</span>
+            </div>
+            <div className="score-item">
+              <span className="score-item-label">Token Savings</span>
+              <span className="score-item-value mono" style={{ color: scoreColor(report.token_savings_pct) }}>{report.token_savings_pct}%</span>
+            </div>
+            <div className="score-item">
+              <span className="score-item-label">Local Tasks</span>
+              <span className="score-item-value mono">{report.local_tasks}/{report.total_tasks}</span>
+            </div>
+            <div className="score-item">
+              <span className="score-item-label">Tokens Saved</span>
+              <span className="score-item-value mono" style={{ color: 'var(--green)' }}>{report.tokens_saved?.toLocaleString()}</span>
+            </div>
+            <div className="score-item">
+              <span className="score-item-label">Time</span>
+              <span className="score-item-value mono">{report.elapsed_seconds}s</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Live progress */}
+      {running && (
+        <div className="benchmark-progress">
+          <div className="progress-header">
+            <span className="chart-title">RUNNING…</span>
+            <span className="mono" style={{ fontSize: 12, color: 'var(--text-2)' }}>{progress.length} completed</span>
+          </div>
+          <div className="progress-tasks">
+            {[...progress].reverse().slice(0, 6).map((t, i) => (
+              <div key={i} className="progress-task">
+                <span className="mono" style={{ fontSize: 11, color: 'var(--text-2)' }}>{t.id}</span>
+                <Badge label={t.route === 'local' ? '⚡ LOCAL' : '☁ REMOTE'} color={t.route === 'local' ? 'var(--green)' : 'var(--amd-red)'} />
+                <span style={{ fontSize: 11, color: t.answer_correct ? 'var(--green)' : 'var(--amd-red)' }}>
+                  {t.answer_correct ? '✓ correct' : '✗ wrong'}
+                </span>
+                <span className="mono" style={{ fontSize: 11, color: 'var(--text-2)', marginLeft: 'auto' }}>{t.tier}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Tier breakdown */}
+      {report?.tier_breakdown && (
+        <div className="tier-breakdown">
+          <div className="chart-title" style={{ marginBottom: 8 }}>TIER BREAKDOWN</div>
+          {Object.entries(report.tier_breakdown).map(([tier, data]) => (
+            <div key={tier} className="tier-row">
+              <span className="tier-name" style={{ color: COMPLEXITY_COLORS[tier] }}>{tier}</span>
+              <div className="tier-bar-track">
+                <div className="tier-bar-fill" style={{ width: `${data.accuracy_pct}%`, background: COMPLEXITY_COLORS[tier] }} />
+              </div>
+              <span className="mono" style={{ fontSize: 11, color: 'var(--text-1)', minWidth: 40 }}>{data.accuracy_pct}%</span>
+              <span className="mono" style={{ fontSize: 11, color: 'var(--text-2)' }}>{data.avg_tokens}t avg</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Run history */}
+      {history.length > 0 && (
+        <div className="benchmark-history">
+          <div className="chart-title" style={{ marginBottom: 8 }}>RUN HISTORY</div>
+          {history.slice(0, 5).map((run) => (
+            <div key={run.run_id} className="history-row" onClick={() => run.run_id !== runId && fetchBenchmark(run.run_id).then(setReport)}>
+              <span className="mono" style={{ fontSize: 11, color: 'var(--text-2)' }}>{run.run_id}</span>
+              <span style={{ fontSize: 11, color: run.status === 'complete' ? 'var(--green)' : 'var(--amber)' }}>{run.status}</span>
+              {run.voxrouter_score != null && (
+                <span className="mono" style={{ fontSize: 12, color: scoreColor(run.voxrouter_score), fontWeight: 700 }}>
+                  {run.voxrouter_score}/100
+                </span>
+              )}
+              <span className="mono" style={{ fontSize: 11, color: 'var(--text-2)', marginLeft: 'auto' }}>{run.total_tasks} tasks</span>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -227,6 +390,7 @@ export default function App() {
           <div className="tabs">
             <button className={`tab ${activeTab === 'submit' ? 'tab--active' : ''}`} onClick={() => setActiveTab('submit')}>Submit Task</button>
             <button className={`tab ${activeTab === 'charts' ? 'tab--active' : ''}`} onClick={() => setActiveTab('charts')}>Analytics</button>
+            <button className={`tab ${activeTab === 'benchmark' ? 'tab--active' : ''}`} onClick={() => setActiveTab('benchmark')}>Benchmark</button>
           </div>
 
           {activeTab === 'submit' && (
@@ -361,6 +525,10 @@ export default function App() {
               </div>
             </div>
           )}
+
+          {activeTab === 'benchmark' && (
+            <BenchmarkPanel />
+          )}
         </div>
 
         {/* Right: Live task feed */}
@@ -396,7 +564,7 @@ export default function App() {
       {/* ── Footer ── */}
       <footer className="footer">
         <span>VoxRouter · AMD Developer Hackathon ACT II · Track 1</span>
-        <span className="footer-stack mono">FastAPI · Ollama · Fireworks AI · React · Recharts</span>
+        <span className="footer-stack mono">FastAPI · Ollama · Fireworks AI · Gemini 2.5 Flash · React · Recharts</span>
       </footer>
     </div>
   )

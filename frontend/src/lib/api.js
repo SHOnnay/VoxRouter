@@ -34,3 +34,21 @@ export async function fetchHistory(limit = 40) {
   if (!res.ok) throw new Error('History unavailable')
   return res.json()
 }
+
+export async function startBenchmark(tier = 'all') {
+  const res = await fetch(`${BASE}/benchmark/run?tier=${tier}`, { method: 'POST' })
+  if (!res.ok) throw new Error('Benchmark failed to start')
+  return res.json()
+}
+
+export async function fetchBenchmark(runId) {
+  const res = await fetch(`${BASE}/benchmark/${runId}`)
+  if (!res.ok) throw new Error('Benchmark not found')
+  return res.json()
+}
+
+export async function fetchBenchmarkList() {
+  const res = await fetch(`${BASE}/benchmark`)
+  if (!res.ok) throw new Error('Benchmark list unavailable')
+  return res.json()
+}
