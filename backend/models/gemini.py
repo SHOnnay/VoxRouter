@@ -27,7 +27,7 @@ class ModelResult:
 
 class GeminiClient:
     BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
-    MODEL = "gemini-2.5-flash"
+    MODEL = "gemini-2.0-flash-lite"
 
     # Gemini 2.5 Flash pricing (per 1K tokens, approximate)
     COST_INPUT_PER_1K  = 0.000075

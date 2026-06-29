@@ -16,7 +16,9 @@
 VoxRouter is an intelligent routing middleware that processes each task and decides **in real time** whether to use:
 
 - **Local model** via Ollama (AMD ROCm) — zero API cost, sub-100ms for simple tasks
-- **Remote model** via Fireworks AI — high capability, reserved for complex tasks
+- **Remote model** via Fireworks AI **or** Google Gemini — high capability, reserved for complex tasks
+
+The remote provider is selectable with the `REMOTE_PROVIDER` env var (`fireworks` or `gemini`).
 
 The router maximizes token efficiency while keeping output accuracy above threshold.
 
@@ -62,12 +64,70 @@ The router maximizes token efficiency while keeping output accuracy above thresh
 | Simple (2) | `qwen2.5:3b` | ~1.9GB | Short reasoning, classification |
 | Moderate (3) | `phi3.5:3.8b` | ~2.2GB | Summaries, short code |
 
-### Remote Models (Fireworks AI)
+### Remote Models
+
+Select the provider with `REMOTE_PROVIDER` (`fireworks` or `gemini`).
+
+**Fireworks AI**
 
 | Complexity | Model | Use Case |
 |-----------|-------|----------|
 | Complex (4) | `mixtral-8x7b-instruct` | Multi-step reasoning |
 | Expert (5) | `llama-v3p3-70b-instruct` | System design, proofs |
+
+**Google Gemini** (`REMOTE_PROVIDER=gemini`)
+
+| Complexity | Model | Use Case |
+|-----------|-------|----------|
+| Complex / Expert (4–5) | `gemini-2.5-flash` | Multi-step reasoning, system design, proofs |
+
+> **Heads up — free-tier quota.** On the Gemini free tier, `gemini-2.5-flash` is
+> capped at **20 requests/day** per project. The 50-task benchmark sends ~30 tasks
+> to the remote model, so a single benchmark run will exhaust the free quota and
+> subsequent calls return HTTP 429. See [Remote Provider & Quota](#remote-provider--quota)
+> and [Troubleshooting](#troubleshooting).
+
+---
+
+## Remote Provider & Quota
+
+VoxRouter talks to whichever remote provider you set in `REMOTE_PROVIDER`:
+
+| Provider | Env var | Get a key |
+|----------|---------|-----------|
+| Fireworks AI | `FIREWORKS_API_KEY` | https://fireworks.ai |
+| Google Gemini | `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
+
+Set either key to `demo` to run that provider in offline demo mode (simulated responses, no network call).
+
+### Gemini free-tier limits
+
+| Model | Free-tier requests/day | Notes |
+|-------|------------------------|-------|
+| `gemini-2.5-flash` | ~20 | Low cap; a single benchmark run exhausts it |
+| `gemini-2.5-flash-lite` | much higher | Good free-tier choice for the benchmark |
+| `gemini-2.0-flash` | much higher | Alternative with a larger free daily cap |
+
+To run the full benchmark on the free tier without hitting 429s, either:
+
+1. **Switch model** — set `MODEL = "gemini-2.5-flash-lite"` in `backend/models/gemini.py`, or
+2. **Enable billing** on your Google Cloud project (Tier 1) to lift the daily cap on `gemini-2.5-flash`.
+
+> A valid Gemini API key starts with `AIza...`. Short-lived `AQ.*` tokens are
+> ephemeral auth tokens, not API keys, and will expire.
+
+### Resilient remote calls
+
+The Gemini client (`backend/models/gemini.py`) is hardened so a bad remote response
+never crashes the `/api/task` endpoint:
+
+- API errors (invalid key, quota, bad request) return a readable `[REMOTE ERROR] ...`
+  result instead of raising an unhandled exception (which would surface as HTTP 500).
+- `429` rate-limit responses are retried with backoff using Gemini's suggested
+  `retryDelay`; a persistent quota cap degrades gracefully.
+- Thinking is disabled (`thinkingConfig.thinkingBudget = 0`) so the full
+  `maxOutputTokens` budget goes to the answer rather than being consumed by
+  internal reasoning tokens (which otherwise causes empty `MAX_TOKENS` responses).
 
 ---
 
@@ -77,7 +137,7 @@ The router maximizes token efficiency while keeping output accuracy above thresh
 
 - Docker + Docker Compose
 - AMD GPU with ROCm support (or CPU fallback)
-- Fireworks AI API key ([get one here](https://fireworks.ai))
+- A remote provider API key — Fireworks AI ([get one](https://fireworks.ai)) **or** Google Gemini ([get one](https://aistudio.google.com/apikey))
 
 ### 1. Clone and configure
 
@@ -86,7 +146,10 @@ git clone https://github.com/SHOnnay/voxrouter
 cd voxrouter
 
 cp .env.example .env
-# Edit .env and set your FIREWORKS_API_KEY
+# Edit .env and set your remote provider + key:
+#   REMOTE_PROVIDER=fireworks   ->  set FIREWORKS_API_KEY
+#   REMOTE_PROVIDER=gemini      ->  set GEMINI_API_KEY (from aistudio.google.com/apikey)
+# Set the key to "demo" to run without a real key.
 ```
 
 ### 2. Launch the full stack
@@ -271,10 +334,42 @@ voxrouter/
 
 ---
 
+## Troubleshooting
+
+**Submitting a task returns "Internal Server Error" (HTTP 500)**
+
+This almost always means the *remote* model call failed and the error wasn't handled.
+Local (trivial/simple) tasks keep working; only tasks that route remote fail. Most common cause:
+
+- **Gemini quota exceeded (HTTP 429).** The free tier allows only ~20 requests/day for
+  `gemini-2.5-flash`. Confirm by calling the API directly:
+
+  ```bash
+  curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"contents":[{"parts":[{"text":"hello"}]}]}'
+  ```
+
+  - `RESOURCE_EXHAUSTED` / `429` → out of quota. Switch to `gemini-2.5-flash-lite`,
+    enable billing, or wait for the daily reset (midnight Pacific).
+  - `API key not valid` → use a real `AIza...` key from https://aistudio.google.com/apikey.
+  - Returns `candidates` → the key is fine.
+
+With the hardened `backend/models/gemini.py`, these now return a `[REMOTE ERROR] ...`
+message in the answer field instead of a 500, so the dashboard stays usable.
+
+**Remote answers come back empty / truncated**
+
+`gemini-2.5-flash` has thinking on by default, and thinking tokens share the
+`maxOutputTokens` budget. The client disables thinking (`thinkingBudget = 0`) so the
+full budget goes to the answer. Raise `maxOutputTokens` if you need longer outputs.
+
+---
+
 ## Built With
 
 - [FastAPI](https://fastapi.tiangolo.com) — async Python backend
 - [Ollama](https://ollama.ai) — local model runtime with AMD ROCm support
-- [Fireworks AI](https://fireworks.ai) — remote model API
+- [Fireworks AI](https://fireworks.ai) / [Google Gemini](https://ai.google.dev) — remote model APIs
 - [React](https://react.dev) + [Recharts](https://recharts.org) — live dashboard
 - [Docker Compose](https://docs.docker.com/compose) — single-command deployment
