@@ -20,51 +20,66 @@ class BenchmarkRunner:
     async def run(
         self,
         task_ids: Optional[List[str]] = None,
-        concurrency: int = 5,
+        concurrency: int = 2,
         progress_callback: Optional[Callable] = None,
     ) -> Dict:
-        """
-        Run the benchmark suite and return a full scored report.
-        
-        Args:
-            task_ids: subset of task IDs to run (None = all 50)
-            concurrency: max parallel tasks
-            progress_callback: called after each task completes
-        """
         tasks = SUITE if not task_ids else [t for t in SUITE if t["id"] in task_ids]
         start_ts = time.time()
 
-        # Run in batches to avoid overwhelming local model
-        results = []
         semaphore = asyncio.Semaphore(concurrency)
 
-        async def run_one(task):
+        async def run_one(task, index):
             async with semaphore:
+                # Small stagger between remote-bound tasks to avoid bursting rate limits
+                if index > 0:
+                    await asyncio.sleep(0.3)
                 result = await self._run_task(task)
                 if progress_callback:
-                    await progress_callback(result)
+                    try:
+                        await progress_callback(result)
+                    except Exception:
+                        pass
                 return result
 
-        results = await asyncio.gather(*[run_one(t) for t in tasks])
-        elapsed = round(time.time() - start_ts, 2)
+        results = await asyncio.gather(*[run_one(t, i) for i, t in enumerate(tasks)], return_exceptions=True)
 
-        score = compute_voxrouter_score(list(results))
+        # Filter out exceptions — treat them as errors
+        clean_results = []
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                clean_results.append({
+                    **tasks[i],
+                    "answer": f"ERROR: {str(r)}",
+                    "route": "error",
+                    "escalated": False,
+                    "tokens_used": 0,
+                    "cost_usd": 0.0,
+                    "latency_ms": 0.0,
+                    "confidence": 0.0,
+                    "answer_correct": False,
+                    "route_correct": False,
+                    "error": str(r),
+                })
+            else:
+                clean_results.append(r)
+
+        elapsed = round(time.time() - start_ts, 2)
+        score = compute_voxrouter_score(clean_results)
         score["elapsed_seconds"] = elapsed
-        score["results"] = list(results)
+        score["results"] = clean_results
 
         return score
 
     async def _run_task(self, task: Dict) -> Dict:
-        """Run a single benchmark task and score it."""
         start = time.time()
 
         # Route decision
         decision = self.router.classify(task["prompt"], task["task_type"])
 
-        # Execute
         try:
             if decision.use_local:
                 model_result = await self.local.complete(task["prompt"], decision)
+                model_result.escalated = False
                 if model_result.confidence < self.router.CONFIDENCE_THRESHOLD:
                     decision.use_local = False
                     decision.escalation_reason = f"Low confidence ({model_result.confidence:.2f})"
@@ -73,6 +88,7 @@ class BenchmarkRunner:
             else:
                 model_result = await self.fireworks.complete(task["prompt"], decision)
                 model_result.escalated = False
+
         except Exception as e:
             return {
                 **task,
@@ -91,12 +107,20 @@ class BenchmarkRunner:
         actual_route = "local" if (decision.use_local and not model_result.escalated) else "remote"
         latency = round((time.time() - start) * 1000, 1)
 
-        # Score
-        answer_correct = score_answer(
-            model_result.answer,
-            task["ground_truth"],
-            task["score_method"],
-        )
+        # Skip accuracy scoring for demo responses or transient API failures —
+        # only score routing for these, since the answer was never actually generated
+        is_demo = any(marker in model_result.answer for marker in (
+            "[DEMO]", "[LOCAL DEMO]", "[RATE LIMITED]", "[GEMINI ERROR", "ERROR:"
+        ))
+        if is_demo:
+            answer_correct = None   # None = not scored (demo mode)
+        else:
+            answer_correct = score_answer(
+                model_result.answer,
+                task["ground_truth"],
+                task["score_method"],
+            )
+
         route_correct = actual_route == task["expected_route"]
 
         return {
@@ -119,4 +143,5 @@ class BenchmarkRunner:
             "confidence": model_result.confidence,
             "answer_correct": answer_correct,
             "route_correct": route_correct,
+            "is_demo": is_demo,
         }

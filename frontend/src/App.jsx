@@ -178,11 +178,19 @@ function BenchmarkPanel() {
               {report.voxrouter_score}
             </div>
             <div className="score-hint">out of 100</div>
+            {report.demo_mode && (
+              <div className="demo-badge">⚠ DEMO MODE</div>
+            )}
           </div>
           <div className="score-breakdown">
             <div className="score-item">
               <span className="score-item-label">Accuracy</span>
-              <span className="score-item-value mono" style={{ color: scoreColor(report.accuracy_pct) }}>{report.accuracy_pct}%</span>
+              <span className="score-item-value mono" style={{ color: report.demo_mode && report.scored_tasks === 0 ? 'var(--text-2)' : scoreColor(report.accuracy_pct) }}>
+                {report.demo_mode && report.scored_tasks === 0 ? 'N/A' : `${report.accuracy_pct}%`}
+              </span>
+              {report.demo_mode && report.scored_tasks > 0 && (
+                <span style={{ fontSize: 10, color: 'var(--text-2)' }}>{report.scored_tasks} real</span>
+              )}
             </div>
             <div className="score-item">
               <span className="score-item-label">Routing</span>
@@ -238,10 +246,18 @@ function BenchmarkPanel() {
             <div key={tier} className="tier-row">
               <span className="tier-name" style={{ color: COMPLEXITY_COLORS[tier] }}>{tier}</span>
               <div className="tier-bar-track">
-                <div className="tier-bar-fill" style={{ width: `${data.accuracy_pct}%`, background: COMPLEXITY_COLORS[tier] }} />
+                <div className="tier-bar-fill" style={{
+                  width: data.accuracy_pct != null ? `${data.accuracy_pct}%` : `${data.routing_pct}%`,
+                  background: data.accuracy_pct != null ? COMPLEXITY_COLORS[tier] : 'var(--text-2)'
+                }} />
               </div>
-              <span className="mono" style={{ fontSize: 11, color: 'var(--text-1)', minWidth: 40 }}>{data.accuracy_pct}%</span>
+              <span className="mono" style={{ fontSize: 11, color: 'var(--text-1)', minWidth: 40 }}>
+                {data.accuracy_pct != null ? `${data.accuracy_pct}%` : `${data.routing_pct}% R`}
+              </span>
               <span className="mono" style={{ fontSize: 11, color: 'var(--text-2)' }}>{data.avg_tokens}t avg</span>
+              {data.demo_tasks > 0 && (
+                <span style={{ fontSize: 10, color: 'var(--amber)' }}>demo</span>
+              )}
             </div>
           ))}
         </div>
@@ -252,7 +268,12 @@ function BenchmarkPanel() {
         <div className="benchmark-history">
           <div className="chart-title" style={{ marginBottom: 8 }}>RUN HISTORY</div>
           {history.slice(0, 5).map((run) => (
-            <div key={run.run_id} className="history-row" onClick={() => run.run_id !== runId && fetchBenchmark(run.run_id).then(setReport)}>
+            <div key={run.run_id} className="history-row" onClick={async () => {
+              try {
+                const data = await fetchBenchmark(run.run_id)
+                setReport({ ...data, status: 'complete' })
+              } catch {}
+            }}>
               <span className="mono" style={{ fontSize: 11, color: 'var(--text-2)' }}>{run.run_id}</span>
               <span style={{ fontSize: 11, color: run.status === 'complete' ? 'var(--green)' : 'var(--amber)' }}>{run.status}</span>
               {run.voxrouter_score != null && (

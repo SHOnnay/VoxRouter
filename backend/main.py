@@ -2,8 +2,7 @@
 VoxRouter – Hybrid Token-Efficient Routing Agent
 AMD Developer Hackathon ACT II – Track 1
 """
-from dotenv import load_dotenv
-load_dotenv()
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -198,7 +197,7 @@ async def run_benchmark(background_tasks: BackgroundTasks, tier: str = "all"):
         try:
             report = await runner.run(
                 task_ids=task_ids,
-                concurrency=3,
+                concurrency=2,
                 progress_callback=on_progress,
             )
             app.state.benchmark_store[run_id] = {

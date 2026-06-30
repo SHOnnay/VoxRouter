@@ -27,7 +27,7 @@ class ModelResult:
 
 class GeminiClient:
     BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
-    MODEL = "gemini-2.0-flash-lite"
+    MODEL = "gemini-2.5-flash"
 
     # Gemini 2.5 Flash pricing (per 1K tokens, approximate)
     COST_INPUT_PER_1K  = 0.000075
@@ -82,7 +82,31 @@ class GeminiClient:
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(url, json=payload)
-            resp.raise_for_status()
+
+            if resp.status_code == 429:
+                error_body = resp.json().get("error", {}).get("message", "Rate limit exceeded")
+                return ModelResult(
+                    answer=f"[RATE LIMITED] Gemini quota exceeded: {error_body}. Falling back to demo mode — try again later or switch GEMINI_API_KEY.",
+                    model_name=f"gemini/{self.MODEL} [RATE LIMITED]",
+                    tokens_used=self._count_tokens(prompt),
+                    tokens_saved=0,
+                    cost_usd=0.0,
+                    confidence=0.5,
+                    latency_ms=round((time.time() - start) * 1000, 1),
+                )
+
+            if resp.status_code != 200:
+                error_body = resp.json().get("error", {}).get("message", resp.text[:200])
+                return ModelResult(
+                    answer=f"[GEMINI ERROR {resp.status_code}] {error_body}",
+                    model_name=f"gemini/{self.MODEL} [ERROR]",
+                    tokens_used=self._count_tokens(prompt),
+                    tokens_saved=0,
+                    cost_usd=0.0,
+                    confidence=0.3,
+                    latency_ms=round((time.time() - start) * 1000, 1),
+                )
+
             data = resp.json()
 
         candidate = data["candidates"][0]

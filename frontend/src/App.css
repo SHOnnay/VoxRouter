@@ -777,3 +777,16 @@
 }
 
 .history-row:hover { background: var(--bg-3); }
+
+/* Demo mode badge */
+.demo-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--amber);
+  background: var(--amber-dim);
+  border: 1px solid rgba(245,158,11,0.3);
+  padding: 2px 8px;
+  border-radius: 20px;
+  letter-spacing: 0.04em;
+  margin-top: 6px;
+}
