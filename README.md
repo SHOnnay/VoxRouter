@@ -1,11 +1,11 @@
 # VoxRouter — Hybrid Token-Efficient Routing Agent
 
-> Route every AI task to the cheapest model that can handle it.  
+> Route every AI task to the cheapest model that can handle it.
 > Local when possible. Remote when necessary. Always efficient.
 
 ![Dashboard](./docs/dashboard.png)
 
-![Stack](https://img.shields.io/badge/stack-FastAPI%20%7C%20Ollama%20%7C%20Fireworks%20AI%20%7C%20React-22c55e?style=for-the-badge)
+![Stack](https://img.shields.io/badge/stack-FastAPI%20%7C%20Ollama%20%7C%20Gemini%20%7C%20Fireworks%20%7C%20React-22c55e?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)
 ![Containerized](https://img.shields.io/badge/containerized-Docker%20Compose-blue?style=for-the-badge&logo=docker)
 
@@ -16,35 +16,42 @@
 VoxRouter is an intelligent routing middleware that processes each task and decides **in real time** whether to use:
 
 - **Local model** via Ollama (AMD ROCm) — zero API cost, sub-100ms for simple tasks
-- **Remote model** via Fireworks AI **or** Google Gemini — high capability, reserved for complex tasks
+- **Remote model** via Gemini or Fireworks AI — high capability, reserved for complex tasks
 
-The remote provider is selectable with the `REMOTE_PROVIDER` env var (`fireworks` or `gemini`).
+Every decision is backed by a **50-task benchmark suite** that scores accuracy, routing correctness, and token savings into one number: the **VoxRouter Score**.
 
-The router maximizes token efficiency while keeping output accuracy above threshold.
+---
+
+## What makes this different from a generic model router
+
+Most routing tools pick a model based on a complexity guess and stop there. VoxRouter adds two things most don't:
+
+1. **Confidence-based escalation** — after the local model answers, VoxRouter checks its own confidence in that answer. If it's below threshold, the task is automatically re-routed to a remote model instead of returning a weak answer. Routing isn't just "predict complexity, pick a model" — it's "try cheap first, verify, escalate only if needed."
+2. **A benchmark suite that grades the router itself** — 50 tasks across 5 difficulty tiers, each with a known correct answer and expected route. Every run produces a reproducible VoxRouter Score instead of anecdotal "it seems to work."
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        VoxRouter                            │
-│                                                             │
-│   Task In ──► RouterEngine ──► Complexity 1-5              │
-│                   │                                         │
-│              ┌────┴────┐                                    │
-│           Score ≤2   Score ≥3                               │
-│              │           │                                  │
-│         Local Model   Remote Model                          │
-│         (Ollama/ROCm) (Fireworks AI)                        │
-│              │           │                                  │
-│         Confidence   Confidence                             │
-│         Check < 0.72?    │                                  │
-│              │           │                                  │
-│         Escalate ────────┘                                  │
-│              │                                              │
-│          Answer + Metrics ──► Dashboard                     │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                          VoxRouter                                │
+│                                                                    │
+│   Task In ──► RouterEngine ──► Complexity 1-5                     │
+│                    │                                               │
+│               ┌────┴────┐                                          │
+│            Score ≤2   Score ≥3                                     │
+│               │           │                                        │
+│         Local Model    Remote Model                                │
+│         (Ollama/ROCm)  (Gemini / Fireworks AI)                     │
+│               │           │                                        │
+│         Confidence     Stream tokens                               │
+│         Check < 0.72?     live to UI                                │
+│               │           │                                        │
+│         Escalate ─────────┘                                        │
+│               │                                                    │
+│          Answer + Metrics ──► Dashboard + Benchmark                │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Routing Logic (4 Layers)
@@ -66,68 +73,24 @@ The router maximizes token efficiency while keeping output accuracy above thresh
 
 ### Remote Models
 
-Select the provider with `REMOTE_PROVIDER` (`fireworks` or `gemini`).
+VoxRouter auto-selects a remote provider based on available API keys:
 
-**Fireworks AI**
+| Provider | Model | Notes |
+|----------|-------|-------|
+| Google Gemini | `gemini-2.5-flash-lite` (configurable) | Default fallback, fast and cheap |
+| Fireworks AI | `mixtral-8x7b-instruct` / `llama-v3p3-70b-instruct` | Used when `FIREWORKS_API_KEY` is set |
 
-| Complexity | Model | Use Case |
-|-----------|-------|----------|
-| Complex (4) | `mixtral-8x7b-instruct` | Multi-step reasoning |
-| Expert (5) | `llama-v3p3-70b-instruct` | System design, proofs |
-
-**Google Gemini** (`REMOTE_PROVIDER=gemini`)
-
-| Complexity | Model | Use Case |
-|-----------|-------|----------|
-| Complex / Expert (4–5) | `gemini-2.5-flash` | Multi-step reasoning, system design, proofs |
-
-> **Heads up — free-tier quota.** On the Gemini free tier, `gemini-2.5-flash` is
-> capped at **20 requests/day** per project. The 50-task benchmark sends ~30 tasks
-> to the remote model, so a single benchmark run will exhaust the free quota and
-> subsequent calls return HTTP 429. See [Remote Provider & Quota](#remote-provider--quota)
-> and [Troubleshooting](#troubleshooting).
+Set `REMOTE_PROVIDER=auto|gemini|fireworks` in `.env` to control this explicitly.
 
 ---
 
-## Remote Provider & Quota
+## Features
 
-VoxRouter talks to whichever remote provider you set in `REMOTE_PROVIDER`:
-
-| Provider | Env var | Get a key |
-|----------|---------|-----------|
-| Fireworks AI | `FIREWORKS_API_KEY` | https://fireworks.ai |
-| Google Gemini | `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
-
-Set either key to `demo` to run that provider in offline demo mode (simulated responses, no network call).
-
-### Gemini free-tier limits
-
-| Model | Free-tier requests/day | Notes |
-|-------|------------------------|-------|
-| `gemini-2.5-flash` | ~20 | Low cap; a single benchmark run exhausts it |
-| `gemini-2.5-flash-lite` | much higher | Good free-tier choice for the benchmark |
-| `gemini-2.0-flash` | much higher | Alternative with a larger free daily cap |
-
-To run the full benchmark on the free tier without hitting 429s, either:
-
-1. **Switch model** — set `MODEL = "gemini-2.5-flash-lite"` in `backend/models/gemini.py`, or
-2. **Enable billing** on your Google Cloud project (Tier 1) to lift the daily cap on `gemini-2.5-flash`.
-
-> A valid Gemini API key starts with `AIza...`. Short-lived `AQ.*` tokens are
-> ephemeral auth tokens, not API keys, and will expire.
-
-### Resilient remote calls
-
-The Gemini client (`backend/models/gemini.py`) is hardened so a bad remote response
-never crashes the `/api/task` endpoint:
-
-- API errors (invalid key, quota, bad request) return a readable `[REMOTE ERROR] ...`
-  result instead of raising an unhandled exception (which would surface as HTTP 500).
-- `429` rate-limit responses are retried with backoff using Gemini's suggested
-  `retryDelay`; a persistent quota cap degrades gracefully.
-- Thinking is disabled (`thinkingConfig.thinkingBudget = 0`) so the full
-  `maxOutputTokens` budget goes to the answer rather than being consumed by
-  internal reasoning tokens (which otherwise causes empty `MAX_TOKENS` responses).
+- **Live routing dashboard** — every task shows its route, complexity score, tokens, cost, latency, and confidence
+- **Streaming responses** — answers stream token-by-token from Ollama or Gemini instead of waiting for the full generation
+- **Benchmark mode** — run a 50-task eval suite on demand and get a scored report with per-tier breakdown
+- **Automatic escalation** — low-confidence local answers are silently retried on a remote model
+- **Demo mode** — runs fully without any API keys for local testing
 
 ---
 
@@ -137,7 +100,7 @@ never crashes the `/api/task` endpoint:
 
 - Docker + Docker Compose
 - AMD GPU with ROCm support (or CPU fallback)
-- A remote provider API key — Fireworks AI ([get one](https://fireworks.ai)) **or** Google Gemini ([get one](https://aistudio.google.com/apikey))
+- A Gemini API key ([aistudio.google.com/apikey](https://aistudio.google.com/apikey)) and/or Fireworks AI key ([fireworks.ai](https://fireworks.ai))
 
 ### 1. Clone and configure
 
@@ -146,10 +109,7 @@ git clone https://github.com/SHOnnay/voxrouter
 cd voxrouter
 
 cp .env.example .env
-# Edit .env and set your remote provider + key:
-#   REMOTE_PROVIDER=fireworks   ->  set FIREWORKS_API_KEY
-#   REMOTE_PROVIDER=gemini      ->  set GEMINI_API_KEY (from aistudio.google.com/apikey)
-# Set the key to "demo" to run without a real key.
+# Edit .env and set GEMINI_API_KEY and/or FIREWORKS_API_KEY
 ```
 
 ### 2. Launch the full stack
@@ -158,11 +118,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-This will:
-- Start Ollama with ROCm GPU support
-- Pull the three local models automatically
-- Start the FastAPI backend
-- Build and serve the React dashboard
+This starts Ollama (with model auto-pull), the FastAPI backend, and the React dashboard.
 
 ### 3. Open the dashboard
 
@@ -178,15 +134,11 @@ curl -X POST http://localhost:8000/api/task \
   -H "Content-Type: application/json" \
   -d '{"prompt": "What is the capital of France?", "task_type": "factual"}'
 
-# Batch tasks
-curl -X POST http://localhost:8000/api/batch \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tasks": [
-      {"prompt": "Is 17 a prime number?", "task_type": "boolean"},
-      {"prompt": "Write a binary search function in Python.", "task_type": "code"}
-    ]
-  }'
+# Streaming
+curl -N "http://localhost:8000/api/task/stream?prompt=Write%20a%20binary%20search%20in%20Python"
+
+# Run the full benchmark
+curl -X POST "http://localhost:8000/api/benchmark/run?tier=all"
 
 # Stats
 curl http://localhost:8000/api/stats
@@ -216,7 +168,6 @@ npm run dev
 ### Local models (Ollama)
 
 ```bash
-# Install from https://ollama.ai
 ollama serve
 ollama pull llama3.2:1b
 ollama pull qwen2.5:3b
@@ -228,67 +179,46 @@ ollama pull phi3.5:3.8b
 ## API Reference
 
 ### `POST /api/task`
+Route and execute a single task. Returns the full result once generation completes.
 
-Route and execute a single task.
+### `GET /api/task/stream`
+Same routing logic, but streams the answer as Server-Sent Events. Query params: `prompt`, `task_type`.
 
-```json
-{
-  "prompt": "string (required)",
-  "task_type": "factual | boolean | classification | extraction | reasoning | generation | code | math_proof",
-  "force_local": false,
-  "force_remote": false
-}
-```
-
-**Response:**
-
-```json
-{
-  "task_id": "a3f8c2d1",
-  "answer": "Paris",
-  "model_used": "local/llama3.2:1b",
-  "route": "local",
-  "escalated": false,
-  "complexity_score": 1,
-  "complexity_label": "trivial",
-  "tokens_used": 42,
-  "tokens_saved": 0.0084,
-  "cost_usd": 0.0,
-  "latency_ms": 87.3,
-  "confidence": 0.91,
-  "timestamp": 1719500000.0
-}
-```
+Event types: `route` (routing decision), `token` (each generated chunk), `escalate` (if confidence triggers escalation), `done` (final task record).
 
 ### `POST /api/batch`
-
 Process up to 50 tasks in parallel.
 
-### `GET /api/stats`
+### `POST /api/benchmark/run?tier=all`
+Start a benchmark run. `tier` can be `all`, `trivial`, `simple`, `moderate`, `complex`, or `expert`. Returns a `run_id` immediately; poll `/api/benchmark/{run_id}` for progress and results.
 
+### `GET /api/benchmark/{run_id}`
+Benchmark status, progress, and — once complete — the full VoxRouter Score report.
+
+### `GET /api/benchmark/{run_id}/stream`
+SSE stream of benchmark task completions as they happen.
+
+### `GET /api/stats`
 Aggregated routing statistics including token efficiency score.
 
 ### `GET /api/history?limit=50`
-
 Recent task history.
-
-### `GET /api/stream`
-
-Server-Sent Events live feed of tasks as they complete.
 
 ---
 
-## Token Efficiency Score
+## VoxRouter Score
 
-The efficiency score (0–100) rewards optimal routing:
+Computed from a 50-task benchmark suite spanning 5 difficulty tiers (10 tasks each):
 
-| Decision | Points |
-|----------|--------|
-| Trivial/simple task → local | +10 |
-| Complex/expert task → remote | +10 |
-| Trivial task → remote (wasted) | +3 |
-| Complex task → local (risky) | +4 |
-| Moderate task → either | +7 |
+```
+VoxRouter Score = (accuracy × 0.5) + (routing_correctness × 0.3) + (token_savings × 0.2)
+```
+
+- **Accuracy** — does the answer match the expected ground truth? (skipped for demo/rate-limited responses so they don't unfairly tank the score)
+- **Routing correctness** — did the task go to the model tier it was supposed to?
+- **Token savings** — tokens actually used vs. an always-remote baseline
+
+Run history and per-tier breakdowns are visible in the Benchmark tab of the dashboard.
 
 ---
 
@@ -297,23 +227,28 @@ The efficiency score (0–100) rewards optimal routing:
 ```
 voxrouter/
 ├── backend/
-│   ├── main.py              # FastAPI app, routing endpoints
+│   ├── main.py                  # FastAPI app, routing + streaming + benchmark endpoints
 │   ├── router/
-│   │   └── core.py          # RouterEngine (4-layer complexity classifier)
+│   │   └── core.py              # RouterEngine (4-layer complexity classifier)
 │   ├── models/
-│   │   ├── fireworks.py     # Fireworks AI remote client
-│   │   └── local.py         # Ollama local client
+│   │   ├── local.py             # Ollama local client (complete + stream)
+│   │   ├── gemini.py            # Gemini remote client (complete + stream)
+│   │   └── fireworks.py         # Fireworks AI remote client (complete + stream)
+│   ├── benchmark/
+│   │   ├── suite.py             # 50-task eval suite with ground truth
+│   │   ├── scorer.py            # VoxRouter Score computation
+│   │   └── runner.py            # Benchmark orchestration
 │   ├── api/
-│   │   └── schemas.py       # Pydantic request/response schemas
+│   │   └── schemas.py           # Pydantic request/response schemas
 │   ├── tasks/
-│   │   └── store.py         # In-memory task store + stats
+│   │   └── store.py             # In-memory task store + stats
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx          # Main dashboard
-│   │   ├── App.css          # Design system
-│   │   ├── lib/api.js       # API client
+│   │   ├── App.jsx              # Dashboard: submit, analytics, benchmark tabs
+│   │   ├── App.css              # Design system
+│   │   ├── lib/api.js           # API client
 │   │   └── hooks/useStats.js
 │   ├── Dockerfile
 │   └── nginx.conf
@@ -326,43 +261,12 @@ voxrouter/
 
 ## Roadmap
 
-- [ ] Benchmark mode — 50-task eval suite with VoxRouter Score
-- [ ] Streaming — real-time token streaming to dashboard
+- [x] Benchmark mode — 50-task eval suite with VoxRouter Score
+- [x] Streaming — real-time token streaming to dashboard
+- [x] Multi-provider remote fallback (Gemini / Fireworks)
 - [ ] SDK — `pip install voxrouter` drop-in routing layer
 - [ ] Budget enforcement — aggressive local routing as token budget depletes
 - [ ] Multi-agent chain — break expert tasks into routed subtasks
-
----
-
-## Troubleshooting
-
-**Submitting a task returns "Internal Server Error" (HTTP 500)**
-
-This almost always means the *remote* model call failed and the error wasn't handled.
-Local (trivial/simple) tasks keep working; only tasks that route remote fail. Most common cause:
-
-- **Gemini quota exceeded (HTTP 429).** The free tier allows only ~20 requests/day for
-  `gemini-2.5-flash`. Confirm by calling the API directly:
-
-  ```bash
-  curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY" \
-    -H "Content-Type: application/json" \
-    -d '{"contents":[{"parts":[{"text":"hello"}]}]}'
-  ```
-
-  - `RESOURCE_EXHAUSTED` / `429` → out of quota. Switch to `gemini-2.5-flash-lite`,
-    enable billing, or wait for the daily reset (midnight Pacific).
-  - `API key not valid` → use a real `AIza...` key from https://aistudio.google.com/apikey.
-  - Returns `candidates` → the key is fine.
-
-With the hardened `backend/models/gemini.py`, these now return a `[REMOTE ERROR] ...`
-message in the answer field instead of a 500, so the dashboard stays usable.
-
-**Remote answers come back empty / truncated**
-
-`gemini-2.5-flash` has thinking on by default, and thinking tokens share the
-`maxOutputTokens` budget. The client disables thinking (`thinkingBudget = 0`) so the
-full budget goes to the answer. Raise `maxOutputTokens` if you need longer outputs.
 
 ---
 
@@ -370,6 +274,17 @@ full budget goes to the answer. Raise `maxOutputTokens` if you need longer outpu
 
 - [FastAPI](https://fastapi.tiangolo.com) — async Python backend
 - [Ollama](https://ollama.ai) — local model runtime with AMD ROCm support
-- [Fireworks AI](https://fireworks.ai) / [Google Gemini](https://ai.google.dev) — remote model APIs
+- [Google Gemini](https://ai.google.dev) — remote model API
+- [Fireworks AI](https://fireworks.ai) — remote model API
 - [React](https://react.dev) + [Recharts](https://recharts.org) — live dashboard
 - [Docker Compose](https://docs.docker.com/compose) — single-command deployment
+
+---
+
+## License
+
+MIT License — free to use, modify, and distribute.
+If you use VoxRouter in your project, a credit or link back to
+[github.com/SHOnnay/voxrouter](https://github.com/SHOnnay/voxrouter) is appreciated.
+
+See [LICENSE](./LICENSE) for the full text.
