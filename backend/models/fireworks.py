@@ -35,15 +35,13 @@ class ModelResult:
 class FireworksClient:
     BASE_URL = "https://api.fireworks.ai/inference/v1"
 
-    # Model tiers – swap on launch day if AMD reveals different models
-    FAST_MODEL   = "accounts/fireworks/models/llama-v3p1-8b-instruct"
-    QUALITY_MODEL = "accounts/fireworks/models/llama-v3p3-70b-instruct"
-    MoE_MODEL    = "accounts/fireworks/models/mixtral-8x7b-instruct"
+    # Model tiers – verified against Fireworks Model Library (July 2026)
+    FAST_MODEL    = "accounts/fireworks/models/glm-5p2"
+    QUALITY_MODEL = "accounts/fireworks/models/glm-5p2"
 
     COST_PER_1K = {
-        "8b":  0.0002,
-        "70b": 0.0009,
-        "moe": 0.0005,
+        "8b":  0.00014,   # glm-5p2 cached input rate, approximate
+        "70b": 0.0014,    # glm-5p2 output rate, approximate
     }
 
     def __init__(self):
@@ -69,8 +67,6 @@ class FireworksClient:
         """Pick model tier based on complexity."""
         if decision.complexity <= 3:
             return self.FAST_MODEL, "8b"
-        elif decision.complexity == 4:
-            return self.MoE_MODEL, "moe"
         else:
             return self.QUALITY_MODEL, "70b"
 

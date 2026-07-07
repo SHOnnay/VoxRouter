@@ -50,9 +50,19 @@ def compute_voxrouter_score(results: List[Dict]) -> Dict:
     demo_mode  = demo_count > 0
 
     # ── Token savings ─────────────────────────────────────────────────────
-    REMOTE_TOKEN_ESTIMATE = 200
-    baseline_tokens = total * REMOTE_TOKEN_ESTIMATE
-    actual_tokens   = sum(r.get("tokens_used", REMOTE_TOKEN_ESTIMATE) for r in results)
+    # Baseline = what it would cost if EVERY task (including the ones that
+    # went local) had instead gone remote. We estimate that per-task remote
+    # cost using the actual average tokens remote calls used in THIS run,
+    # rather than a flat guess — a real task typically needs a similarly
+    # verbose answer regardless of which tier classified it.
+    remote_results = [r for r in results if r.get("route") == "remote" and not r.get("is_demo", False)]
+    if remote_results:
+        avg_remote_tokens = sum(r.get("tokens_used", 0) for r in remote_results) / len(remote_results)
+    else:
+        avg_remote_tokens = 200  # fallback when no real remote data exists yet
+
+    baseline_tokens = round(total * avg_remote_tokens)
+    actual_tokens   = sum(r.get("tokens_used", avg_remote_tokens) for r in results)
     token_savings_pct = max(0, ((baseline_tokens - actual_tokens) / baseline_tokens) * 100)
 
     # ── VoxRouter Score ───────────────────────────────────────────────────
