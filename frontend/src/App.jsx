@@ -298,10 +298,17 @@ export default function App() {
   const [lastResult, setLastResult] = useState(null)
   const [activeTab, setActiveTab] = useState('submit')
   const [demoRunning, setDemoRunning] = useState(false)
+  const [streamMode, setStreamMode] = useState(true)
+  const [streamingText, setStreamingText] = useState('')
+  const [streamRoute, setStreamRoute] = useState(null)
+  const [streamEscalated, setStreamEscalated] = useState(false)
   const textareaRef = useRef(null)
+  const eventSourceRef = useRef(null)
 
   const handleSubmit = async () => {
     if (!prompt.trim() || loading) return
+    if (streamMode) return handleStreamSubmit()
+
     setLoading(true)
     try {
       const result = await submitTask(prompt.trim(), taskType || null)
@@ -314,6 +321,54 @@ export default function App() {
       setLoading(false)
     }
   }
+
+  const handleStreamSubmit = () => {
+    setLoading(true)
+    setStreamingText('')
+    setStreamRoute(null)
+    setStreamEscalated(false)
+    setLastResult(null)
+
+    const params = new URLSearchParams({ prompt: prompt.trim() })
+    if (taskType) params.set('task_type', taskType)
+
+    const es = new EventSource(`/api/task/stream?${params.toString()}`)
+    eventSourceRef.current = es
+
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+
+        if (data.type === 'route') {
+          setStreamRoute({ route: data.route, complexity_score: data.complexity_score, complexity_label: data.complexity_label })
+        } else if (data.type === 'escalate') {
+          setStreamEscalated(true)
+          setStreamRoute(prev => ({ ...prev, route: 'remote' }))
+        } else if (data.type === 'token') {
+          setStreamingText(prev => prev + data.text)
+        } else if (data.type === 'done') {
+          setLastResult(data.task)
+          setLoading(false)
+          setPrompt('')
+          es.close()
+          refresh()
+        } else if (data.type === 'error') {
+          alert('Stream error: ' + data.message)
+          setLoading(false)
+          es.close()
+        }
+      } catch {}
+    }
+
+    es.onerror = () => {
+      setLoading(false)
+      es.close()
+    }
+  }
+
+  useEffect(() => {
+    return () => { if (eventSourceRef.current) eventSourceRef.current.close() }
+  }, [])
 
   const runDemo = async () => {
     setDemoRunning(true)
@@ -445,6 +500,11 @@ export default function App() {
                 </select>
               </div>
 
+              <label className="stream-toggle">
+                <input type="checkbox" checked={streamMode} onChange={e => setStreamMode(e.target.checked)} />
+                <span>Stream response live</span>
+              </label>
+
               <div className="form-actions">
                 <button
                   className="btn btn-primary"
@@ -463,7 +523,21 @@ export default function App() {
                 </button>
               </div>
 
-              {lastResult && (
+              {streamMode && loading && streamRoute && (
+                <div className="result-card stream-live">
+                  <div className="result-header">
+                    <RouteDecisionBadge route={streamRoute.route} escalated={streamEscalated} />
+                    <ComplexityBar score={streamRoute.complexity_score} />
+                    <span className="stream-live-dot" />
+                  </div>
+                  <div className="result-answer mono">
+                    {streamingText}
+                    <span className="cursor-blink">▌</span>
+                  </div>
+                </div>
+              )}
+
+              {!loading && lastResult && (
                 <div className="result-card">
                   <div className="result-header">
                     <RouteDecisionBadge route={lastResult.route} escalated={lastResult.escalated} />

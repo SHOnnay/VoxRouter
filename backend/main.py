@@ -2,7 +2,8 @@
 VoxRouter – Hybrid Token-Efficient Routing Agent
 AMD Developer Hackathon ACT II – Track 1
 """
-
+from dotenv import load_dotenv
+load_dotenv()
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -117,6 +118,98 @@ async def process_task(req: TaskRequest):
 
     store.add(task_record)
     return task_record
+
+
+# ── Streaming Endpoint ────────────────────────────────────────────────────────
+@app.get("/api/task/stream")
+async def stream_task(prompt: str, task_type: str = None):
+    """
+    Route a task and stream the answer as tokens arrive (SSE).
+    Same routing logic as /api/task, but the response streams live
+    instead of waiting for the full generation to finish.
+    """
+    store: TaskStore = app.state.task_store
+    router: RouterEngine = app.state.router
+    fireworks: FireworksClient = app.state.fireworks
+    local: LocalModelClient = app.state.local
+
+    task_id = str(uuid.uuid4())[:8]
+    start_ts = time.time()
+    route_decision = router.classify(prompt, task_type)
+
+    async def event_generator():
+        # Send the routing decision immediately so the UI can show it before tokens arrive
+        yield f"data: {json.dumps({'type': 'route', 'task_id': task_id, 'complexity_score': route_decision.complexity, 'complexity_label': route_decision.label, 'route': 'local' if route_decision.use_local else 'remote'})}\n\n"
+
+        final_result = None
+        escalated = False
+
+        if route_decision.use_local:
+            # Buffer local stream so we can check confidence before committing to "local" in the UI
+            buffered_tokens = []
+            async for chunk in local.stream(prompt, route_decision):
+                if chunk["type"] == "token":
+                    buffered_tokens.append(chunk["text"])
+                elif chunk["type"] == "done":
+                    final_result = chunk["result"]
+
+            if final_result and final_result.confidence < router.CONFIDENCE_THRESHOLD:
+                # Escalate — discard local buffer, stream remote instead
+                escalated = True
+                route_decision.use_local = False
+                route_decision.escalation_reason = f"Low confidence ({final_result.confidence:.2f}) → escalating to remote"
+                yield f"data: {json.dumps({'type': 'escalate', 'reason': route_decision.escalation_reason})}\n\n"
+
+                async for chunk in fireworks.stream(prompt, route_decision):
+                    if chunk["type"] == "token":
+                        yield f"data: {json.dumps({'type': 'token', 'text': chunk['text']})}\n\n"
+                    elif chunk["type"] == "done":
+                        final_result = chunk["result"]
+                        final_result.escalated = True
+            else:
+                # Confidence was fine — replay the buffered local tokens to the client
+                for text in buffered_tokens:
+                    yield f"data: {json.dumps({'type': 'token', 'text': text})}\n\n"
+                if final_result:
+                    final_result.escalated = False
+        else:
+            async for chunk in fireworks.stream(prompt, route_decision):
+                if chunk["type"] == "token":
+                    yield f"data: {json.dumps({'type': 'token', 'text': chunk['text']})}\n\n"
+                elif chunk["type"] == "done":
+                    final_result = chunk["result"]
+                    final_result.escalated = False
+
+        if not final_result:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'No result generated'})}\n\n"
+            return
+
+        elapsed = round((time.time() - start_ts) * 1000, 1)
+        actual_route = "local" if (route_decision.use_local and not final_result.escalated) else "remote"
+
+        task_record = TaskResponse(
+            task_id=task_id,
+            prompt=prompt,
+            task_type=task_type,
+            answer=final_result.answer,
+            model_used=final_result.model_name,
+            route=actual_route,
+            escalated=final_result.escalated,
+            escalation_reason=route_decision.escalation_reason,
+            complexity_score=route_decision.complexity,
+            complexity_label=route_decision.label,
+            tokens_used=final_result.tokens_used,
+            tokens_saved=final_result.tokens_saved,
+            cost_usd=final_result.cost_usd,
+            latency_ms=elapsed,
+            confidence=final_result.confidence,
+            timestamp=time.time(),
+        )
+        store.add(task_record)
+
+        yield f"data: {json.dumps({'type': 'done', 'task': task_record.model_dump()})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 # ── Batch Endpoint ────────────────────────────────────────────────────────────

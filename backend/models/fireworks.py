@@ -11,6 +11,7 @@ Models (revealed on launch day – these are the defaults per hackathon):
 
 import os
 import time
+import json
 import httpx
 import tiktoken
 from dataclasses import dataclass
@@ -165,3 +166,94 @@ class FireworksClient:
             confidence=0.85,
             latency_ms=120.0,
         )
+
+    async def stream(self, prompt: str, decision: RouteDecision):
+        """
+        Stream tokens from Fireworks using OpenAI-compatible SSE.
+        Yields {"type": "token", "text": "..."} then {"type": "done", "result": ModelResult}
+        """
+        model_id, tier = self._pick_model(decision)
+        start = time.time()
+        prompt_tokens = self._count_tokens(prompt)
+
+        if not self.api_key or self.api_key == "demo":
+            result = self._demo_response(prompt, model_id, tier, prompt_tokens)
+            for word in result.answer.split(" "):
+                yield {"type": "token", "text": word + " "}
+            yield {"type": "done", "result": result}
+            return
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": model_id,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a precise, efficient assistant. Answer accurately and concisely.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": 1024,
+            "temperature": 0.2,
+            "stream": True,
+        }
+
+        full_answer = ""
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async with client.stream(
+                    "POST", f"{self.BASE_URL}/chat/completions", headers=headers, json=payload
+                ) as resp:
+                    if resp.status_code != 200:
+                        yield {"type": "token", "text": f"[FIREWORKS ERROR {resp.status_code}]"}
+                        result = ModelResult(
+                            answer=f"[FIREWORKS ERROR {resp.status_code}]",
+                            model_name=f"fireworks/{model_id.split('/')[-1]} [ERROR]",
+                            tokens_used=prompt_tokens, tokens_saved=0, cost_usd=0.0,
+                            confidence=0.3, latency_ms=round((time.time() - start) * 1000, 1),
+                        )
+                        yield {"type": "done", "result": result}
+                        return
+
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        raw = line[5:].strip()
+                        if not raw or raw == "[DONE]":
+                            continue
+                        try:
+                            chunk = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        token = delta.get("content", "")
+                        if token:
+                            full_answer += token
+                            yield {"type": "token", "text": token}
+
+            latency = round((time.time() - start) * 1000, 1)
+            total_tokens = self._count_tokens(prompt + full_answer)
+            cost = (total_tokens / 1000) * self.COST_PER_1K[tier]
+
+            result = ModelResult(
+                answer=full_answer.strip(),
+                model_name=f"fireworks/{model_id.split('/')[-1]}",
+                tokens_used=total_tokens,
+                tokens_saved=0,
+                cost_usd=round(cost, 6),
+                confidence=self._estimate_confidence(full_answer),
+                latency_ms=latency,
+            )
+            yield {"type": "done", "result": result}
+
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            result = ModelResult(
+                answer=f"[FIREWORKS ERROR] Connection failed: {str(e)}",
+                model_name=f"fireworks/{model_id.split('/')[-1]} [ERROR]",
+                tokens_used=prompt_tokens, tokens_saved=0, cost_usd=0.0,
+                confidence=0.3, latency_ms=round((time.time() - start) * 1000, 1),
+            )
+            yield {"type": "done", "result": result}

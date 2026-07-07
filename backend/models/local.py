@@ -15,6 +15,7 @@ Supported models (swap on launch day):
 
 import os
 import time
+import json
 import httpx
 import tiktoken
 from dataclasses import dataclass
@@ -161,3 +162,78 @@ class LocalModelClient:
             confidence=self._estimate_confidence(answer, prompt),
             latency_ms=latency,
         )
+
+    async def stream(self, prompt: str, decision: RouteDecision):
+        """
+        Stream tokens from Ollama as they're generated.
+        Yields dicts: {"type": "token", "text": "..."} then a final
+        {"type": "done", "result": ModelResult}
+        """
+        model = self._pick_model(decision)
+        start = time.time()
+        prompt_tokens = self._count_tokens(prompt)
+        full_answer = ""
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.OLLAMA_BASE}/api/chat",
+                    json={
+                        "model": model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You are a precise, concise assistant. "
+                                    "Answer the question directly and accurately. "
+                                    "Do not add unnecessary padding or caveats."
+                                ),
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                        "stream": True,
+                        "options": {
+                            "temperature": 0.1,
+                            "num_predict": 512,
+                        },
+                    },
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        chunk = json.loads(line)
+                        token = chunk.get("message", {}).get("content", "")
+                        if token:
+                            full_answer += token
+                            yield {"type": "token", "text": token}
+                        if chunk.get("done"):
+                            break
+
+            total_tokens = prompt_tokens + self._count_tokens(full_answer)
+            latency = round((time.time() - start) * 1000, 1)
+
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError):
+            fallback = (
+                f"[LOCAL DEMO] Ollama not running. Start with: `ollama serve` "
+                f"and pull `{model}`. Would have answered: '{prompt[:80]}'"
+            )
+            for word in fallback.split(" "):
+                yield {"type": "token", "text": word + " "}
+            full_answer = fallback
+            total_tokens = prompt_tokens + self._count_tokens(full_answer)
+            latency = 0.0
+
+        tokens_saved_cost = (total_tokens / 1000) * self.REMOTE_COST_PER_1K
+
+        result = ModelResult(
+            answer=full_answer.strip(),
+            model_name=f"local/{model}",
+            tokens_used=total_tokens,
+            tokens_saved=round(tokens_saved_cost * 10000) / 10000,
+            cost_usd=0.0,
+            confidence=self._estimate_confidence(full_answer, prompt),
+            latency_ms=latency,
+        )
+        yield {"type": "done", "result": result}

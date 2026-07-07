@@ -3,7 +3,7 @@
 > Route every AI task to the cheapest model that can handle it.
 > Local when possible. Remote when necessary. Always efficient.
 
-![Dashboard](./docs/dashboard.png)
+![Dashboard](./docs/VoxRouter.png)
 
 ![Stack](https://img.shields.io/badge/stack-FastAPI%20%7C%20Ollama%20%7C%20Gemini%20%7C%20Fireworks%20%7C%20React-22c55e?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)
