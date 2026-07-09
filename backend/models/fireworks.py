@@ -113,7 +113,7 @@ class FireworksClient:
                 },
                 {"role": "user", "content": prompt},
             ],
-            "max_tokens": 1024,
+            "max_tokens": 8192,
             "temperature": 0.2,
         }
 
@@ -192,7 +192,7 @@ class FireworksClient:
                 },
                 {"role": "user", "content": prompt},
             ],
-            "max_tokens": 1024,
+            "max_tokens": 8192,
             "temperature": 0.2,
             "stream": True,
         }

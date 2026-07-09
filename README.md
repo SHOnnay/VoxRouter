@@ -3,11 +3,21 @@
 > Route every AI task to the cheapest model that can handle it.
 > Local when possible. Remote when necessary. Always efficient.
 
-![Dashboard](./docs/VoxRouter.png)
+![Dashboard](./docs/VoxRouter.png.png)
 
 ![Stack](https://img.shields.io/badge/stack-FastAPI%20%7C%20Ollama%20%7C%20Gemini%20%7C%20Fireworks%20%7C%20React-22c55e?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)
 ![Containerized](https://img.shields.io/badge/containerized-Docker%20Compose-blue?style=for-the-badge&logo=docker)
+
+---
+
+## Live Demo
+
+- **Frontend:** [voxrouter-1.onrender.com](https://voxrouter-1.onrender.com)
+- **Backend API:** [voxrouter.onrender.com](https://voxrouter.onrender.com)
+- **SDK (standalone package):** [github.com/SHOnnay/voxrouter-sdk](https://github.com/SHOnnay/voxrouter-sdk)
+
+> **Note:** The deployed version has no access to a local Ollama instance, so every task routes to the remote model (Gemini/Fireworks) regardless of complexity tier. Local routing, free-tier cost savings, and the full hybrid behavior are best experienced by running VoxRouter locally with Docker Compose (see Quick Start below), where Ollama runs alongside the backend.
 
 ---
 
@@ -78,7 +88,7 @@ VoxRouter auto-selects a remote provider based on available API keys:
 | Provider | Model | Notes |
 |----------|-------|-------|
 | Google Gemini | `gemini-2.5-flash-lite` (configurable) | Default fallback, fast and cheap |
-| Fireworks AI | `mixtral-8x7b-instruct` / `llama-v3p3-70b-instruct` | Used when `FIREWORKS_API_KEY` is set |
+| Fireworks AI | `glm-5p2` | Used when `FIREWORKS_API_KEY` is set |
 
 Set `REMOTE_PROVIDER=auto|gemini|fireworks` in `.env` to control this explicitly.
 
